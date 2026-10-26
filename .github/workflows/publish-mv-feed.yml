@@ -1,0 +1,58 @@
+name: Publish public MV feed
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '37 0,6,12,18 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mv-public-feed
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.MV_FEED_SYNC_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    outputs:
+      changed: ${{ steps.compare.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Require YouTube API key
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+        run: test -n "$YOUTUBE_API_KEY"
+      - name: Fetch and validate public playlist
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+        run: python3 scripts/sync-youtube-playlist.py --output public/mv-playlist.json
+      - name: Compare with current published feed
+        id: compare
+        run: python3 scripts/compare-published.py public/mv-playlist.json
+      - name: Upload JSON-only Pages artifact
+        if: steps.compare.outputs.changed == 'true'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    if: needs.build.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy public JSON
+        id: deployment
+        uses: actions/deploy-pages@v4
